@@ -1,11 +1,7 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using System.Net;
 using System.Net.Sockets;
-using System.Threading;
 using Makaretu.Dns;
+using System.Net.NetworkInformation;
 
 class IoTServer
 {
@@ -35,6 +31,27 @@ class IoTServer
         Console.WriteLine($"[SERVER] Initialized IoT binary server at {host ?? "0.0.0.0"}:{port}");
     }
 
+    string GetLocalIPv4()
+    {
+        foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (nic.OperationalStatus != OperationalStatus.Up)
+                continue;
+
+            var props = nic.GetIPProperties();
+
+            foreach (var addr in props.UnicastAddresses)
+            {
+                if (addr.Address.AddressFamily == AddressFamily.InterNetwork &&
+                    !IPAddress.IsLoopback(addr.Address))
+                {
+                    return addr.Address.ToString();
+                }
+            }
+        }
+        return "0.0.0.0"; // fallback
+    }
+
     public void Start()
     {
         try
@@ -43,11 +60,8 @@ class IoTServer
             server = new TcpListener(ipAddress, port);
             server.Start();
 
-            string localIp = Dns.GetHostAddresses(Dns.GetHostName())
-                .FirstOrDefault(ip => ip.AddressFamily == AddressFamily.InterNetwork)?.ToString() ?? "0.0.0.0";
-
+            string localIp = GetLocalIPv4();
             Console.WriteLine($"[SERVER] Listening at {localIp}:{port}");
-            Console.WriteLine($"[SERVER] Waiting for connections...");
 
             // Iniciar mDNS
             StartMdns(localIp);
@@ -220,22 +234,16 @@ class IoTServer
             mdns = new MulticastService();
             serviceDiscovery = new ServiceDiscovery(mdns);
 
-            // Instancia del servicio, incluyendo la IP del host
-            var addresses = new List<IPAddress> { IPAddress.Parse(localIp) };
+            // Convertimos la IP string a objeto IPAddress
+            var ipAddress = IPAddress.Parse(localIp);
 
-            // 'instanceName' = nombre visible en la red (sin '.local')
-            // 'serviceName'  = tipo de servicio
-            var service = new ServiceProfile("iot-server", "_iot._tcp", port, addresses);
+            // Incluir la IP en el anuncio
+            var service = new ServiceProfile("iot", "_server._tcp", (ushort)port, new[] { IPAddress.Parse(localIp) });
 
-            // Añadimos propiedades informativas (opcional)
-            service.AddProperty("info", "Servidor IoT TCP");
-            service.AddProperty("port", port.ToString());
-
-            // Anunciamos el servicio
             serviceDiscovery.Advertise(service);
             mdns.Start();
 
-            Console.WriteLine($"[MDNS] Anunciado como 'iot-server.local' en puerto {port}");
+            Console.WriteLine($"[MDNS] Advertise as 'iot-server.utp.local' in port {port}");
         }
         catch (Exception ex)
         {
